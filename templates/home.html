@@ -1,0 +1,15 @@
+{{ define "title" }} Blog's home page {{ end }}
+{{ define "body" }}
+
+<div>
+    <h1 style="max-width:fit-content;margin-left:auto;margin-right:auto;">Articles</h1>
+    {{ range . }}
+    <div style="max-width:fit-content;margin-left:auto;margin-right:auto;">
+    <a href="articles/{{ .ID }}" style="font-size: 30px;">
+        {{ .Title }} [{{ .CreationDate.Format "02.01.2006" }}]
+    </a>
+    </div>
+    {{ end }}
+</div>
+
+{{ end }}

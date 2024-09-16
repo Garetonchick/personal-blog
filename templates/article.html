@@ -1,0 +1,9 @@
+{{ define "title" }} {{.A.Title}} {{ end }}
+{{ define "body" }} 
+
+<div style="max-width:fit-content;margin-left:auto;margin-right:auto;">
+    <h1>{{ .A.Title }}</h1>
+    {{ .HTMLContent }}
+</div>
+
+{{ end }}
