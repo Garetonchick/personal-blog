@@ -14,3 +14,7 @@ a {
 a:hover{
     color:#b37b02;
 }
+
+.error {
+    color: red;
+}

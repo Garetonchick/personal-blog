@@ -1,0 +1,30 @@
+{{ define "title" }} Edit article {{ end }}
+{{ define "body" }} 
+<div style="max-width:fit-content;margin-left:auto;margin-right:auto;">
+    <h1> Edit article </h1>
+    <form action="" method="post">
+        <div>
+            <p><label for="title">Article's title:</label></p>
+            {{ with .Errors.title }}
+            <p class="error"> {{ . }}</p>
+            {{ end }}
+            <p><input type="text" id="title" name="title" value="{{ .Title }}"></p>
+        </div>
+        <div>
+            <p><label for="content">Article's content in Markdown:</label></p>
+            {{ with .Errors.content }}
+            <p class="error"> {{ . }}</p>
+            {{ end }}
+            <p><textarea   id="content" 
+                        class="input shadow" 
+                        name="content" 
+                        rows="15" 
+                        cols="100" 
+                        placeholder="Your text here ">{{ .Content }}</textarea></p>
+        </div>
+        <div>
+            <input type="submit" value="Save">
+        </div>
+    </form>
+</div>
+{{ end }}

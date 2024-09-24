@@ -8,9 +8,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
+	"time"
 
 	"github.com/Garetonchick/personal-blog/internal/articles"
+	"github.com/Garetonchick/personal-blog/internal/forms"
 	"github.com/Garetonchick/personal-blog/internal/utils"
 )
 
@@ -52,11 +53,44 @@ func (s *Server) registerHandlers() {
 
 	s.mux.Handle("GET /home", apply(s.ServeHomePage))
 	s.mux.Handle("GET /articles/{id}", apply(s.ServeArticlePage))
-	s.mux.Handle("GET /articles/edit/{id}", apply(s.ServeArticlePage))
+	s.mux.Handle("GET /articles/edit/{id}", apply(s.ServeArticleEditPage))
+	s.mux.Handle("POST /articles/edit/{id}", apply(s.ServeArticleEditRequest))
 }
 
-func (s *Server) ServeArticleEditPage(rw http.ResponseWriter, r *http.Request) {
+func (s *Server) ServeArticleEditRequest(rw http.ResponseWriter, r *http.Request) ([]string, any, error) {
+	id := r.PathValue("id")
 
+	err := r.ParseForm()
+	if err != nil {
+		return nil, nil, err
+	}
+	aForm := forms.Article{
+		Title:   r.Form.Get("title"),
+		Content: r.Form.Get("content"),
+	}
+	if !aForm.Validate() {
+		return []string{"edit_article.html"}, aForm, nil
+	}
+
+	a, err := s.articlesManager.Load(id)
+	if errors.Is(err, articles.ErrNotExist) {
+		a = articles.Article{}
+		a.ID = id
+		a.CreationDate = time.Now().Format(articles.DATE_FORMAT)
+	} else if err != nil {
+		return nil, nil, err
+	}
+
+	a.Title = aForm.Title
+	a.Content = []byte(aForm.Content)
+	s.articlesManager.Save(&a)
+
+	http.Redirect(rw, r, fmt.Sprintf("/articles/%s", id), http.StatusSeeOther)
+	return nil, nil, nil
+}
+
+func (s *Server) ServeArticleEditPage(rw http.ResponseWriter, r *http.Request) ([]string, any, error) {
+	return []string{"edit_article.html"}, nil, nil
 }
 
 func errorMiddleware(h errorHandler) http.Handler {
@@ -94,30 +128,17 @@ func templateMiddleware(h templateHandler) errorHandler {
 }
 
 func (s *Server) ServeHomePage(rw http.ResponseWriter, r *http.Request) ([]string, any, error) {
-	ids := s.articlesManager.List()
-	ids = ids[:min(10, len(ids))]
-	var ars []*articles.Article
-
-	for _, id := range ids {
-		a := s.articlesManager.Load(id)
-		if a == nil {
-			continue
-		}
-		ars = append(ars, a)
-	}
-
+	ars := s.articlesManager.List()
+	ars = ars[:min(10, len(ars))]
 	return []string{"home.html"}, ars, nil
 }
 
 func (s *Server) ServeArticlePage(rw http.ResponseWriter, r *http.Request) ([]string, any, error) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid id: %w", err)
-	}
+	id := r.PathValue("id")
 
-	a := s.articlesManager.Load(id)
-	if a == nil {
-		return nil, nil, errors.New("article not found")
+	a, err := s.articlesManager.Load(id)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	htmlArticle := struct {
@@ -125,7 +146,7 @@ func (s *Server) ServeArticlePage(rw http.ResponseWriter, r *http.Request) ([]st
 		A           *articles.Article
 	}{
 		HTMLContent: utils.MD2SafeHTML(a.Content),
-		A:           a,
+		A:           &a,
 	}
 
 	return []string{"article.html"}, htmlArticle, nil

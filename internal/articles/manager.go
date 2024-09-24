@@ -1,140 +1,165 @@
 package articles
 
 import (
+	"cmp"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 )
 
+type Meta struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	CreationDate string `json:"creation-date"`
+}
+
 type Article struct {
-	ID           int
-	Title        string
-	CreationDate time.Time
-	Content      []byte
+	Meta
+	Content []byte
 }
 
 const DATE_FORMAT = "02.01.2006"
 
-var filenameRegexp *regexp.Regexp
+var ErrNotExist = errors.New("article doesn't exist")
 
-func init() {
-	filenameRegexp = regexp.MustCompile(`^(.+)-(\d+)-([^-]+).md$`)
+type ArticleDoesNotExist struct {
+	ArticleID string
 }
 
-func (a *Article) Filename() string {
-	return a.Title + "-" + strconv.Itoa(a.ID) + "-" + a.CreationDate.Format(DATE_FORMAT) + ".md"
+func (err *ArticleDoesNotExist) Error() string {
+	return fmt.Sprintf("article %q doesn't exist", string(err.ArticleID))
 }
 
-func (a *Article) Save(dir string) error {
-	path := filepath.Join(dir, a.Filename())
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0666)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
+func (err *ArticleDoesNotExist) Unwrap() error {
+	return ErrNotExist
+}
 
-	_, err = file.Write(a.Content)
+func loadMeta(path string) ([]Meta, error) {
+	metaRaw, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	var metas []Meta
+	err = json.Unmarshal(metaRaw, &metas)
+	return metas, err
 }
 
-func parseArticleFilename(filename string) (*Article, error) {
-	var err error
+func loadArticle(dir string, meta *Meta) (*Article, error) {
+	data, err := os.ReadFile(filepath.Join(dir, meta.ID+".md"))
+	if err != nil {
+		return nil, err
+	}
+
 	var a Article
-
-	m := filenameRegexp.FindStringSubmatchIndex(filename)
-	if len(m) != 8 {
-		return nil, errors.New("wrong filename format")
-	}
-
-	a.Title = filename[m[2]:m[3]]
-	idS := filename[m[4]:m[5]]
-	dateS := filename[m[6]:m[7]]
-
-	a.CreationDate, err = time.Parse(DATE_FORMAT, dateS)
-	if err != nil {
-		return nil, err
-	}
-
-	a.ID, err = strconv.Atoi(idS)
-	if err != nil {
-		return nil, err
-	}
-
-	return &a, err
-}
-
-func Load(path string) (*Article, error) {
-	a, err := parseArticleFilename(filepath.Base(path))
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
+	a.Meta = *meta
 	a.Content = data
-	return a, nil
+
+	return &a, nil
 }
 
 type Manager struct {
 	mu       sync.Mutex
 	workdir  string
-	articles map[int]*Article
-	maxID    int
+	articles map[string]Article
 }
 
-func (m *Manager) List() []int {
+func (m *Manager) List() []Article {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	ids := make([]int, 0, len(m.articles))
-	for id := range m.articles {
-		ids = append(ids, id)
+	ars := make([]Article, 0, len(m.articles))
+	for _, a := range m.articles {
+		ars = append(ars, a)
 	}
 
-	slices.Sort(ids)
-	slices.Reverse(ids)
-	return ids
+	slices.SortFunc(ars, func(a1, a2 Article) int {
+		d1, err := time.Parse(DATE_FORMAT, a1.CreationDate)
+		if err != nil {
+			panic(err)
+		}
+		d2, err := time.Parse(DATE_FORMAT, a2.CreationDate)
+		if err != nil {
+			panic(err)
+		}
+		if d1 == d2 {
+			return cmp.Compare(a1.ID, a2.ID)
+		}
+		if d1.Before(d2) {
+			return 1
+		}
+		return -1
+	})
+	return ars
 }
 
-func (m *Manager) Save(a *Article) (id int, err error) {
+func (m *Manager) updateMeta(a *Article) error {
+	metas, err := loadMeta(filepath.Join(m.workdir, "meta.json"))
+	if err != nil {
+		return err
+	}
+
+	found := false
+
+	for i, meta := range metas {
+		if meta.ID == a.ID {
+			metas[i].CreationDate = a.CreationDate
+			metas[i].Title = a.Title
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		metas = append(metas, Meta{
+			ID:           a.ID,
+			CreationDate: a.CreationDate,
+			Title:        a.Title,
+		})
+	}
+
+	newMeta, err := json.Marshal(metas)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(filepath.Join(m.workdir, "meta.json"), newMeta, 0644)
+}
+
+func (m *Manager) Save(a *Article) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.maxID += 1
-	a.ID = m.maxID
-	m.articles[a.ID] = a
+	m.articles[a.ID] = *a
 
-	path := filepath.Join(m.workdir, a.Filename())
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0666)
+	path := filepath.Join(m.workdir, a.ID+".md")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer file.Close()
 
 	_, err = file.Write(a.Content)
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	return a.ID, nil
+	return m.updateMeta(a)
 }
 
-func (m *Manager) Load(id int) *Article {
+func (m *Manager) Load(id string) (Article, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.articles[id]
+	a, ok := m.articles[id]
+	if !ok {
+		return Article{}, &ArticleDoesNotExist{ArticleID: id}
+	}
+	return a, nil
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -144,29 +169,31 @@ func NewManager(dir string) (*Manager, error) {
 		return nil, err
 	}
 
-	files, err := os.ReadDir(workdir)
-	if err != nil {
+	m := Manager{workdir: workdir, articles: make(map[string]Article)}
+
+	metas, err := loadMeta(filepath.Join(workdir, "meta.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		f, err := os.Create(filepath.Join(workdir, "meta.json"))
+		if err != nil {
+			return nil, err
+		}
+		f.Close()
+	} else if err != nil {
 		return nil, err
 	}
 
-	m := Manager{workdir: workdir, articles: make(map[int]*Article)}
+	var errs []error
 
-	for _, file := range files {
-		if !file.Type().IsRegular() {
-			continue
-		}
-
-		info, err := file.Info()
+	for _, meta := range metas {
+		a, err := loadArticle(workdir, &meta)
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
 		}
+		m.articles[a.ID] = *a
+	}
 
-		a, err := Load(filepath.Join(workdir, info.Name()))
-		if err != nil {
-			return nil, err
-		}
-
-		m.articles[a.ID] = a
+	if len(errs) != 0 {
+		return &m, errs[0]
 	}
 
 	return &m, nil
